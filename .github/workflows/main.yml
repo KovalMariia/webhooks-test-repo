@@ -1,0 +1,23 @@
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  update-jira:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract Jira issue key
+        run: |
+          ISSUE_KEY=$(echo "${{ github.event.pull_request.title }}" | grep -oE '[A-Z]+-[0-9]+')
+          echo "ISSUE_KEY=$ISSUE_KEY" >> $GITHUB_ENV
+      - name: Add component in Jira
+        run: |
+          curl -X PUT \
+          -H "Authorization: Bearer ${{ secrets.JIRA_API_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          --data '{
+            "update": {
+              "labels": [{ "add": { "name": "backend" } }]
+            }
+          }' \
+          "https://webhooks-test.atlassian.net/rest/api/3/issue/${{ env.ISSUE_KEY }}"
