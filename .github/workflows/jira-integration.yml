@@ -1,0 +1,89 @@
+name: Jira Integration
+
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  update-jira:
+    name: Update Jira Issue
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install jira
+
+      - name: Extract Jira Issue Key from PR Title
+        id: extract-issue
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          echo "PR Title: $PR_TITLE"
+
+          # Extract issue key (format: CA-123)
+          ISSUE_KEY=$(echo "$PR_TITLE" | grep -oE '^[A-Z]+-[0-9]+' || echo "")
+
+          if [ -z "$ISSUE_KEY" ]; then
+            echo "No Jira issue key found in PR title. Expected format: 'CA-123 Description'"
+            exit 1
+          fi
+
+          echo "Found Jira issue key: $ISSUE_KEY"
+          echo "issue-key=$ISSUE_KEY" >> $GITHUB_OUTPUT
+
+      - name: Login to Jira
+        uses: atlassian/gajira-login@v3
+        env:
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+
+      - name: Add Component to Jira Issue
+        id: add-component
+        env:
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT: ${{ vars.JIRA_PROJECT }}
+          ISSUE_KEY: ${{ steps.extract-issue.outputs.issue-key }}
+          COMPONENT_NAME: ${{ github.event.repository.name }}
+        run: |
+          echo "Component name: $COMPONENT_NAME (repository name)"
+          python .github/scripts/add_jira_component.py
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.add-component.outputs.status }}" = "skipped" ]; then
+            echo "### Jira Integration Skipped ⊘" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Issue**: ${{ steps.extract-issue.outputs.issue-key }}" >> $GITHUB_STEP_SUMMARY
+
+            SKIP_REASON="${{ steps.add-component.outputs.skip_reason }}"
+            if [ "$SKIP_REASON" = "missing_project_filter" ]; then
+              echo "- **Reason**: JIRA_PROJECT variable is not configured" >> $GITHUB_STEP_SUMMARY
+              echo "- **Action Required**: Configure JIRA_PROJECT repository variable (e.g., \`CA\` or \`DEV,QA\`)" >> $GITHUB_STEP_SUMMARY
+            elif [ "$SKIP_REASON" = "invalid_project_filter" ]; then
+              echo "- **Reason**: JIRA_PROJECT variable contains no valid project keys" >> $GITHUB_STEP_SUMMARY
+              echo "- **Current Value**: \`${{ vars.JIRA_PROJECT }}\`" >> $GITHUB_STEP_SUMMARY
+            elif [ "$SKIP_REASON" = "project_not_allowed" ]; then
+              echo "- **Reason**: Issue project does not match configured filter" >> $GITHUB_STEP_SUMMARY
+              echo "- **Allowed Projects**: ${{ vars.JIRA_PROJECT }}" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **Reason**: Unknown" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "### Jira Integration Complete ✓" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Issue**: ${{ steps.extract-issue.outputs.issue-key }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Component**: ${{ github.event.repository.name }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Allowed Projects**: ${{ vars.JIRA_PROJECT }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **PR**: #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
+          fi
